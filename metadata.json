@@ -1,0 +1,7 @@
+{
+  "name": "FluentAI - English Tutor",
+  "description": "A real-time voice-based English conversation trainer powered by Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
