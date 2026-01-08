@@ -5,46 +5,54 @@ import { ChatMessage, ConnectionState } from '../types';
 
 const API_KEY = process.env.API_KEY || '';
 
+/**
+ * Hook customizado para gerenciar a conexão com a Gemini Live API.
+ * Lida com entrada/saída de áudio, transcrições e estado da conexão.
+ */
 export const useLiveAPI = () => {
+  // Estados de interface
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inProgressUserMessage, setInProgressUserMessage] = useState<string>('');
   const [currentVolume, setCurrentVolume] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
-  // Audio Contexts and Nodes
+  // Referências para processamento de áudio (não disparam re-renderizações)
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const inputSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const outputNodeRef = useRef<GainNode | null>(null);
   
-  // State for playback scheduling
+  // Controle de agendamento de reprodução de áudio (gapless playback)
   const nextStartTimeRef = useRef<number>(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   
-  // Transcription state
+  // Acumuladores de texto para transcrição (mensagens podem chegar em partes)
   const currentInputTransRef = useRef<string>('');
   const currentOutputTransRef = useRef<string>('');
 
-  // Session management
+  // Gerenciamento da sessão WebSocket
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  /**
+   * Finaliza a sessão e libera todos os recursos de hardware (microfone e áudio).
+   */
   const disconnect = useCallback(async () => {
-    // Stop all audio sources
+    // Para todos os buffers de áudio em reprodução
     sourcesRef.current.forEach(source => {
       try { source.stop(); } catch (e) { /* ignore */ }
     });
     sourcesRef.current.clear();
 
-    // Close microphone stream
+    // Fecha o acesso ao microfone
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
 
-    // Close AudioContexts
+    // Fecha os contextos de áudio do navegador
     if (inputAudioContextRef.current) {
       try { await inputAudioContextRef.current.close(); } catch(e) {}
       inputAudioContextRef.current = null;
@@ -54,7 +62,7 @@ export const useLiveAPI = () => {
       outputAudioContextRef.current = null;
     }
 
-    // Disconnect processors
+    // Desconecta os nós de processamento
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current = null;
@@ -64,11 +72,11 @@ export const useLiveAPI = () => {
       inputSourceRef.current = null;
     }
     
-    // Close session if possible
+    // Fecha a conexão com a API Gemini
     if (sessionPromiseRef.current) {
         sessionPromiseRef.current.then(session => {
              try { session.close(); } catch(e) { console.warn("Failed to close session", e); }
-        }).catch(() => {}); // Ignore if session didn't connect
+        }).catch(() => {});
         sessionPromiseRef.current = null;
     }
 
@@ -77,6 +85,9 @@ export const useLiveAPI = () => {
     setCurrentVolume(0);
   }, []);
 
+  /**
+   * Inicia a conexão: abre microfone, cria contextos de áudio e conecta ao WebSocket da Gemini.
+   */
   const connect = useCallback(async () => {
     if (!API_KEY) {
       setError("API Key not found.");
@@ -87,32 +98,33 @@ export const useLiveAPI = () => {
       setConnectionState(ConnectionState.CONNECTING);
       setError(null);
 
-      // 1. Setup Audio Input
+      // 1. Configuração da Entrada de Áudio (Microfone)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
       const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      await inputAudioContext.resume(); // Ensure context is running
+      await inputAudioContext.resume();
       inputAudioContextRef.current = inputAudioContext;
 
+      // 2. Configuração da Saída de Áudio (Resposta da IA)
       const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      await outputAudioContext.resume(); // Ensure context is running
+      await outputAudioContext.resume();
       outputAudioContextRef.current = outputAudioContext;
       
       const outputNode = outputAudioContext.createGain();
       outputNode.connect(outputAudioContext.destination);
       outputNodeRef.current = outputNode;
 
-      // 2. Initialize GenAI Client
+      // 3. Inicialização do Cliente GenAI
       const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-      // 3. Connect to Live API
+      // 4. Conexão com a Live API via WebSockets
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.0-flash-exp',
         config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: {}, 
-          outputAudioTranscription: {},
+          responseModalities: [Modality.AUDIO], // Resposta em áudio
+          inputAudioTranscription: {},           // Habilita transcrição da fala do usuário
+          outputAudioTranscription: {},          // Habilita transcrição da fala da IA
           systemInstruction: {
             parts: [{
               text: "You are a friendly and professional English language tutor. Your goal is to help the user practice English conversation. Engage them in interesting topics. If the user makes a grammatical mistake, gently correct them and explain why, then continue the conversation. Adjust your vocabulary to be suitable for an intermediate learner. Be encouraging and patient."
@@ -126,21 +138,22 @@ export const useLiveAPI = () => {
           onopen: () => {
             setConnectionState(ConnectionState.CONNECTED);
             
-            // Setup Audio Processing for Mic
+            // Loop de Processamento: Captura o áudio do mic e envia para a IA em pedaços (chunks)
             const source = inputAudioContext.createMediaStreamSource(stream);
             const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
             
             scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
               const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
               
-              // Calculate volume for visualizer
+              // Cálculo simples de volume para o componente visualizador
               let sum = 0;
               for(let i=0; i<inputData.length; i++) {
                   sum += inputData[i] * inputData[i];
               }
               const rms = Math.sqrt(sum / inputData.length);
-              setCurrentVolume(Math.min(1, rms * 5)); // Boost slightly for visibility
+              setCurrentVolume(Math.min(1, rms * 5)); 
 
+              // Envia os dados de áudio codificados para a IA
               const pcmBlob = createBlob(inputData);
               sessionPromise.then((session) => {
                 try {
@@ -148,8 +161,6 @@ export const useLiveAPI = () => {
                 } catch(e) {
                    console.error("Error sending audio chunk", e);
                 }
-              }).catch(err => {
-                   // Session might not be ready or failed
               });
             };
 
@@ -160,11 +171,12 @@ export const useLiveAPI = () => {
             processorRef.current = scriptProcessor;
           },
           onmessage: async (message: LiveServerMessage) => {
-            // 1. Handle Audio Response
+            // A. Processamento do Áudio de Resposta
             const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (base64Audio) {
               const ctx = outputAudioContextRef.current;
               if (ctx) {
+                // Agenda o próximo pedaço de áudio para tocar exatamente após o anterior
                 nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
                 
                 try {
@@ -192,7 +204,8 @@ export const useLiveAPI = () => {
               }
             }
 
-            // 2. Handle Interruption
+            // B. Tratamento de Interrupção (Barge-in)
+            // Se o usuário começar a falar enquanto a IA fala, para a reprodução atual
             if (message.serverContent?.interrupted) {
                 sourcesRef.current.forEach(source => {
                     try { source.stop(); } catch(e) {}
@@ -201,17 +214,17 @@ export const useLiveAPI = () => {
                 nextStartTimeRef.current = 0;
             }
 
-            // 3. Handle Transcription
-            // Accumulate text
+            // C. Processamento das Transcrições de Texto
             if (message.serverContent?.outputTranscription) {
                currentOutputTransRef.current += message.serverContent.outputTranscription.text;
             }
             if (message.serverContent?.inputTranscription) {
                currentInputTransRef.current += message.serverContent.inputTranscription.text;
+               // Atualiza o feedback visual da transcrição em progresso do usuário
                setInProgressUserMessage(currentInputTransRef.current);
             }
 
-            // Commit to message history on turn complete
+            // Quando a IA ou o usuário termina uma frase, adicionamos ao histórico oficial
             if (message.serverContent?.turnComplete) {
                 const userText = currentInputTransRef.current.trim();
                 const modelText = currentOutputTransRef.current.trim();
@@ -240,14 +253,10 @@ export const useLiveAPI = () => {
           },
           onerror: (e) => {
             console.error("Session error:", e);
-            // Only disconnect on fatal errors or detailed error check if available
-            // For now, we assume errors are fatal for the session connectivity.
             setError(`Session error: ${e.message || "Connection lost"}`);
             disconnect();
           },
           onclose: (e) => {
-            console.log("Session closed", e);
-            // Check if it was a clean close or unexpected
             if (!e.wasClean) {
                 setError("Connection closed unexpectedly.");
             }
@@ -265,12 +274,9 @@ export const useLiveAPI = () => {
     }
   }, [disconnect]);
 
-  // Cleanup on unmount
+  // Limpeza automática se o componente for destruído
   useEffect(() => {
     return () => {
-      // Don't call disconnect here immediately to avoid double-firing in StrictMode during mount
-      // But we need to cleanup when truly unmounting.
-      // For this simple app, it's fine.
       disconnect();
     };
   }, []);

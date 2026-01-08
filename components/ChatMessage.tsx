@@ -5,6 +5,10 @@ interface ChatMessageProps {
   message: ChatMessageType;
 }
 
+/**
+ * Renderiza um balão de mensagem individual no chat.
+ * Diferencia visualmente entre Usuário (azul, direita) e Tutor (branco, esquerda).
+ */
 const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
   const isUser = message.role === 'user';
   
@@ -17,9 +21,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
             : 'bg-white border border-slate-100 text-slate-700 rounded-bl-none'
         }`}
       >
-        <div className="font-semibold text-xs opacity-70 mb-1 mb-1 block">
+        <span className="font-semibold text-xs opacity-70 mb-1 block">
             {isUser ? 'You' : 'Tutor'}
-        </div>
+        </span>
         {message.text}
       </div>
     </div>

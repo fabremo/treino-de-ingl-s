@@ -4,11 +4,28 @@ import AudioVisualizer from './components/AudioVisualizer';
 import ChatMessage from './components/ChatMessage';
 import { ConnectionState } from './types';
 
+/**
+ * Componente principal da aplicação FluentAI.
+ * Orquestra a interface do usuário e conecta os estados do hook useLiveAPI à tela.
+ */
 function App() {
-  const { connect, disconnect, connectionState, messages, inProgressUserMessage, currentVolume, error } = useLiveAPI();
+  // Extração de estados e funções do hook de lógica da API
+  const { 
+    connect, 
+    disconnect, 
+    connectionState, 
+    messages, 
+    inProgressUserMessage, 
+    currentVolume, 
+    error 
+  } = useLiveAPI();
+  
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom of chat
+  /**
+   * Efeito para garantir que o chat sempre role para o final quando novas mensagens
+   * ou transcrições parciais chegarem.
+   */
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -18,6 +35,9 @@ function App() {
   const isConnected = connectionState === ConnectionState.CONNECTED;
   const isConnecting = connectionState === ConnectionState.CONNECTING;
 
+  /**
+   * Alterna entre iniciar a conversa ou encerrá-la.
+   */
   const handleToggleConnection = () => {
     if (isConnected || isConnecting) {
       disconnect();
@@ -28,7 +48,7 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 max-w-4xl mx-auto shadow-2xl overflow-hidden relative">
-      {/* Header */}
+      {/* Cabeçalho com Status da Conexão */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-indigo-100 rounded-lg">
@@ -45,14 +65,15 @@ function App() {
         <div className="flex items-center gap-2">
             <div className={`h-2.5 w-2.5 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
             <span className="text-sm font-medium text-slate-600">
-                {isConnected ? 'Live' : connectionState === ConnectionState.CONNECTING ? 'Connecting...' : 'Offline'}
+                {isConnected ? 'Live' : isConnecting ? 'Connecting...' : 'Offline'}
             </span>
         </div>
       </header>
 
-      {/* Main Chat Area */}
+      {/* Área Central de Mensagens */}
       <main className="flex-1 overflow-hidden relative flex flex-col">
         {messages.length === 0 && !isConnected ? (
+           /* Estado Vazio: Quando não há conversa iniciada */
            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400">
              <div className="bg-slate-100 p-6 rounded-full mb-6">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -65,22 +86,23 @@ function App() {
              </p>
            </div>
         ) : (
+            /* Lista de Mensagens: Histórico e transcrição em tempo real */
             <div 
               ref={scrollRef}
               className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide scroll-smooth"
             >
-              {/* Introduction Message (Fake) if connected and no messages */}
               {isConnected && messages.length === 0 && (
                   <div className="text-center text-sm text-slate-400 my-4 italic animate-pulse">
                       Listening... Speak now to start the conversation.
                   </div>
               )}
               
+              {/* Renderiza o histórico de mensagens oficial */}
               {messages.map((msg) => (
                 <ChatMessage key={msg.id} message={msg} />
               ))}
               
-              {/* Real-time User Transcription */}
+              {/* Renderiza o que o usuário está falando no momento (antes da frase terminar) */}
               {inProgressUserMessage && (
                 <ChatMessage 
                   message={{
@@ -93,24 +115,24 @@ function App() {
                 />
               )}
               
-              {/* Spacer for bottom controls */}
+              {/* Espaçamento para evitar que as mensagens fiquem atrás do painel de controle */}
               <div className="h-24"></div>
             </div>
         )}
         
-        {/* Error Notification */}
+        {/* Notificação de Erro Flutuante */}
         {error && (
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm shadow-md animate-bounce">
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm shadow-md animate-bounce z-50">
                 {error}
             </div>
         )}
       </main>
 
-      {/* Bottom Controls */}
+      {/* Painel Inferior de Controles */}
       <div className="bg-white/90 backdrop-blur-md border-t border-slate-200 p-6 absolute bottom-0 left-0 right-0 z-20">
         <div className="flex flex-col items-center justify-center gap-4">
           
-          {/* Visualizer */}
+          {/* Visualizador de Áudio: Mostra atividade da voz */}
           <div className="h-16 w-full flex items-center justify-center">
              {isConnected ? (
                  <AudioVisualizer volume={currentVolume} active={isConnected} />
@@ -119,7 +141,7 @@ function App() {
              )}
           </div>
 
-          {/* Main Action Button */}
+          {/* Botão de Ação Principal: Ligar/Desligar */}
           <button
             onClick={handleToggleConnection}
             disabled={isConnecting}
@@ -157,7 +179,7 @@ function App() {
           </button>
           
           <p className="text-xs text-slate-400">
-             Powered by Gemini 2.5 Live API
+             Powered by Gemini 2.0 Live API
           </p>
         </div>
       </div>
